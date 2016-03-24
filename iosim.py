@@ -277,7 +277,15 @@ class FilesystemStorage(Storage):
         # create output directory
         if not os.path.exists(self.rootdir):
             logging.info("Creating directory path '%s' ...", self.rootdir)
-            os.makedirs(self.rootdir)
+            try:
+                os.makedirs(self.rootdir)
+            except IOError as err:
+                if err.errno == 17:
+                    # directory exists, might have been created by an
+                    # independent process -- ignore
+                    pass
+                else:
+                    raise
 
     def _get_absolute_location(self, loc):
         """
