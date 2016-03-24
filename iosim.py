@@ -396,6 +396,44 @@ def worker():
 @argument("start")
 @argument("end")
 @argument("step")
+@option("--md5",
+        default=None, metavar='HASH',
+        help=("Check that the MD5 checksum of each read file is exactly HASH."
+              " (Must be a 32-digit hexadecimal string.)"))
+def read(storage, rootdir, pattern, start, end, step, md5=None):
+    _setup_logging()
+    storage = make_storage(storage, rootdir)
+    start = nonnegative_int(start, 'START')
+    end = positive_int(end, 'END')
+    step = positive_int(step, 'STEP')
+    logging.info(
+        "Will read %d files, names ranging from '%s' to '%s' with stepping %d",
+        ((end - start) // step),  # total nr. of files
+        pattern.format(start),
+        pattern.format(last(start, end, step)),
+        step)
+    for n in xrange(start, end, step):
+        infile = (pattern.format(n))
+        data = storage.get(infile)
+        if md5:
+            hasher = hashlib.md5()
+            hasher.update(data)
+            digest = hasher.digest()
+            if digest != md5:
+                logging.error(
+                    "Data in '%s' has MD5 digest '%s',"
+                    " different from expected '%s'",
+                    digest, md5)
+    logging.info("All done.")
+
+
+@worker.command()
+@argument("storage")
+@argument("rootdir")
+@argument("pattern")
+@argument("start")
+@argument("end")
+@argument("step")
 @argument("payload")  # Path to a template file or size of the random data to be generated
 def write(storage, rootdir, pattern, start, end, step, payload):
     _setup_logging()
