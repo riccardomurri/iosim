@@ -37,9 +37,12 @@ import logging
 import math
 import os
 import sys
+from tempfile import NamedTemporaryFile
+import time
 
-from click import argument, command, group, option, echo
+from click import argument, command, group, option, echo, BadArgumentUsage
 
+from gc3libs import create_engine, Application
 from gc3libs.quantity import Memory
 
 
@@ -66,6 +69,87 @@ def _setup_logging():
             format=const.logfmt,
             level=const.loglevel
         )
+
+
+def last(start, end, step=1):
+    """
+    Return the maximum number in range START:END:STEP.
+    """
+    rangelen = (end - start) // step
+    top = start + (rangelen-1)*step
+    assert top < end
+    return top
+
+
+def _parse_and_validate_arg(value, conv, valid, errmsg,
+                            name='', errcls=BadArgumentUsage, do_exit=False):
+    """
+    Convert a string argument and validate result.
+
+    Upon failure of the conversion or validation,
+    raise a `click.BadArgumentUsage` exception or
+    log error and exit program, depending on the value
+    of the `do_exit` parameter.
+
+    Arguments `conv` and `valid` should be 1-ary functions:
+
+    * `conv` takes a string argument and returns the wanted result;
+    * `valid` takes the converted argument and returns ``True`` or ``False``.
+
+    Fourth argument `errmsg` is the error message to show when
+    conversion or validation fails.  Optional argument `name`, if
+    provided, is substituted into every occurrence of the string
+    ``{name}`` in the error message text using the `.format()` method.
+    """
+    try:
+        result = conv(value)
+        if not valid(result):
+            raise ValueError()
+        else:
+            return result
+    except (ValueError, TypeError):
+        msg = errmsg.format(arg=(" '" + name + "' ") if name else ' ')
+        if do_exit:
+            logging.fatal(msg)
+            sys.exit(os.EX_USAGE)
+        else:
+            raise errcls(msg)
+
+
+def nonnegative_int(value, name='', do_exit=False):
+    """
+    Convert to integer and check that the result is >=0.
+
+    Upon failure of the conversion or validation,
+    raise a `click.BadArgumentUsage` exception or
+    log error and exit program, depending on the value
+    of the `do_exit` parameter.
+
+    Second argument `name`, if provided, is used in the error message
+    text to name the quantity that failed conversion.
+    """
+    return _parse_and_validate_arg(
+        value, int, (lambda arg: arg >= 0),
+        errmsg="Argument{arg}must be a non-negative integer number.",
+        name=name, do_exit=do_exit)
+
+
+def positive_int(value, name='', do_exit=False):
+    """
+    Convert to integer and check that the result is >0.
+
+    Upon failure of the conversion or validation,
+    raise a `click.BadArgumentUsage` exception or
+    log error and exit program, depending on the value
+    of the `do_exit` parameter.
+
+    Second argument `name`, if provided, is used in the error message
+    text to name the quantity that failed conversion.
+    """
+    return _parse_and_validate_arg(
+        value, int, (lambda arg: arg > 0),
+        errmsg="Argument{arg}must be a positive integer number.",
+        name=name, do_exit=do_exit)
 
 
 def _get_payload(payload):
@@ -235,7 +319,11 @@ def cli():
 @option("--jobs", "-j",
         default=1, metavar='NUM',
         help="Allow NUM simultaneous writers.")
-def create(storage, rootdir, numfiles, payload, jobs=1):
+@option("--work-dir", "-d",
+        default=None, metavar='DIR',
+        help=("Working directory for writing temporary files."
+              " Must be visible to all worker processes."))
+def create(storage, rootdir, numfiles, payload, jobs=1, work_dir=None):
     """\
     Write fake payload in a given location.
 
@@ -248,21 +336,85 @@ def create(storage, rootdir, numfiles, payload, jobs=1):
     turn determines how the root location specifier is interpreted.
     """
     _setup_logging()
-    try:
-        numfiles = int(numfiles)
-        if numfiles < 1:
-            raise ValueError()
-    except ValueError, TypeError:
-        logging.fatal("Argument NUMFILES must be a positive integer number.")
-        sys.exit(1)
+    numfiles = positive_int(numfiles, 'NUMFILES')
     data = _get_payload(payload)
-    # create identical output files
-    if jobs != 1:
-        raise NotImplementedError("Multiple concurrent jobs are not yet supported.")
-    storage = make_storage(storage, rootdir)
+
     prec = 1 + int(math.log(numfiles, 10))
-    for n in xrange(numfiles):
-        outfile = ("data{{n:0{p}d}}".format(p=prec).format(n=n))
+    fmt = "data{{0:0{p}d}}".format(p=prec)
+
+    # write payload data to a file in a shared directory; must be
+    # careful to ensure that data is flushed out to the filesystem
+    # otherwise workers running remotely might not see it
+    if work_dir is None:
+        work_dir = os.getcwd()
+    with NamedTemporaryFile(prefix='payload.', dir=work_dir) as payload_file:
+        payload_file.write(data)
+        payload_file.flush()
+        os.fsync(payload_file)
+
+        # create identical output files
+        engine = create_engine()
+        for n in xrange(jobs):
+            jobname = ('worker{n}'.format(n=n))
+            engine.add(Application(
+                [os.path.realpath(sys.argv[0]), 'worker', 'write',
+                 storage, rootdir, fmt, n, numfiles, jobs, payload_file.name],
+                inputs=[],
+                outputs=[],
+                output_dir=os.path.join(os.getcwd(), jobname),
+                stdout=(jobname + '.log'),
+                join=True,
+                jobname = jobname,
+            ))
+        stats = engine.stats()
+        done = stats['TERMINATED']
+        while done < jobs:
+            time.sleep(1)
+            engine.progress()
+            stats = engine.stats()
+            done = stats['TERMINATED']
+            logging.info(
+                "%d jobs terminated (of which %d successfully),"
+                " %d running, %d queued.",
+                done, stats['ok'], stats['RUNNING'], stats['SUBMITTED'] + stats['NEW']
+            )
+    logging.info("All done.")
+
+
+@cli.group()
+def worker():
+    """
+    Low level actions, mainly for internal use.
+    """
+    pass
+
+
+@worker.command()
+@argument("storage")
+@argument("rootdir")
+@argument("pattern")
+@argument("start")
+@argument("end")
+@argument("step")
+@argument("payload")  # Path to a template file or size of the random data to be generated
+def write(storage, rootdir, pattern, start, end, step, payload):
+    _setup_logging()
+    storage = make_storage(storage, rootdir)
+    start = nonnegative_int(start, 'START')
+    end = positive_int(end, 'END')
+    step = positive_int(step, 'STEP')
+    with open(payload, 'rb') as stream:
+        logging.debug("Loading data payload from file '%s' ...", payload)
+        data = stream.read()
+    logging.debug("Using pattern '%s' for creating names.", pattern)
+    logging.info(
+        "Creating %d files, names ranging from '%s' to '%s' with stepping %d",
+        ((end - start) // step),  # total nr. of files
+        pattern.format(start),
+        pattern.format(last(start, end, step)),
+        step)
+    for n in xrange(start, end, step):
+        outfile = (pattern.format(n))
         storage.put(outfile, data)
     logging.info("All done.")
 
