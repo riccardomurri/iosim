@@ -312,6 +312,45 @@ class FilesystemStorage(Storage):
 
 
 #
+# GC3Pie interface
+#
+
+def run_jobs(jobs, argv, interval=1):
+    """
+    Create and run jobs, each executing the command specified by `argv`.
+
+    If any item in sequence `argv` is equal to the (single-character
+    string) ``#``, it is substituted with the current job index.
+    """
+    engine = create_engine()
+    for n in xrange(jobs):
+        jobname = ('worker{n}'.format(n=n))
+        job_argv = [(arg if arg != '#' else n) for arg in argv]
+        engine.add(Application(
+            job_argv,
+            inputs=[],
+            outputs=[],
+            output_dir=os.path.join(os.getcwd(), jobname),
+            stdout=(jobname + '.log'),
+            join=True,
+            jobname = jobname,
+        ))
+    # loop until all jobs are done
+    stats = engine.stats()
+    done = stats['TERMINATED']
+    while done < jobs:
+        time.sleep(interval)
+        engine.progress()
+        stats = engine.stats()
+        done = stats['TERMINATED']
+        logging.info(
+            "%d jobs terminated (of which %d successfully),"
+            " %d running, %d queued.",
+            done, stats['ok'], stats['RUNNING'], stats['SUBMITTED'] + stats['NEW']
+        )
+
+
+#
 # Command-line interface definition
 #
 
@@ -361,31 +400,8 @@ def create(storage, rootdir, numfiles, payload, jobs=1, work_dir=None):
         os.fsync(payload_file)
 
         # create identical output files
-        engine = create_engine()
-        for n in xrange(jobs):
-            jobname = ('worker{n}'.format(n=n))
-            engine.add(Application(
-                [os.path.realpath(sys.argv[0]), 'worker', 'write',
-                 storage, rootdir, fmt, n, numfiles, jobs, payload_file.name],
-                inputs=[],
-                outputs=[],
-                output_dir=os.path.join(os.getcwd(), jobname),
-                stdout=(jobname + '.log'),
-                join=True,
-                jobname = jobname,
-            ))
-        stats = engine.stats()
-        done = stats['TERMINATED']
-        while done < jobs:
-            time.sleep(1)
-            engine.progress()
-            stats = engine.stats()
-            done = stats['TERMINATED']
-            logging.info(
-                "%d jobs terminated (of which %d successfully),"
-                " %d running, %d queued.",
-                done, stats['ok'], stats['RUNNING'], stats['SUBMITTED'] + stats['NEW']
-            )
+        run_jobs(jobs, [os.path.realpath(sys.argv[0]), 'worker', 'write',
+                        storage, rootdir, fmt, '#', numfiles, jobs, payload_file.name])
     logging.info("All done.")
 
 
