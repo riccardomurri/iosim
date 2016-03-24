@@ -400,7 +400,7 @@ def create(storage, rootdir, numfiles, payload, jobs=1, work_dir=None):
         os.fsync(payload_file)
 
         # create identical output files
-        run_jobs(jobs, [os.path.realpath(sys.argv[0]), 'worker', 'write',
+        run_jobs(jobs, [os.path.realpath(sys.argv[0]), 'worker', 'wr',
                         storage, rootdir, fmt, '#', numfiles, jobs, payload_file.name])
     logging.info("All done.")
 
@@ -424,7 +424,10 @@ def worker():
         default=None, metavar='HASH',
         help=("Check that the MD5 checksum of each read file is exactly HASH."
               " (Must be a 32-digit hexadecimal string.)"))
-def read(storage, rootdir, pattern, start, end, step, md5=None):
+def rd(storage, rootdir, pattern, start, end, step, md5=None):
+    """
+    Read a range of files and check intergrity.
+    """
     _setup_logging()
     storage = make_storage(storage, rootdir)
     start = nonnegative_int(start, 'START')
@@ -459,7 +462,10 @@ def read(storage, rootdir, pattern, start, end, step, md5=None):
 @argument("end")
 @argument("step")
 @argument("payload")  # Path to a template file or size of the random data to be generated
-def write(storage, rootdir, pattern, start, end, step, payload):
+def wr(storage, rootdir, pattern, start, end, step, payload):
+    """
+    Write a range of identical files.
+    """
     _setup_logging()
     storage = make_storage(storage, rootdir)
     start = nonnegative_int(start, 'START')
