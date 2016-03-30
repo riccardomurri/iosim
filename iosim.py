@@ -152,6 +152,16 @@ def positive_int(value, name='', do_exit=False):
         name=name, do_exit=do_exit)
 
 
+def _get_pattern_and_numfiles(numfiles):
+    """Common code for many functions."""
+    numfiles = positive_int(numfiles, 'NUMFILES')
+
+    prec = 1 + int(math.log(numfiles, 10))
+    fmt = "data{{0:0{p}d}}".format(p=prec)
+
+    return fmt, numfiles
+
+
 def _get_payload(payload):
     try:
         try:
@@ -358,6 +368,67 @@ def run_jobs(jobs, argv, interval=1, max_concurrent=0):
 def cli():
     pass
 
+
+@cli.group()
+def benchmark():
+    """
+    Run various kinds of I/O workloads.
+    """
+    pass
+
+
+@benchmark.command()
+@argument("storage")
+@argument("rootdir")
+@argument("numjobs")
+@argument("numfiles")
+def read(storage, rootdir, numjobs, numfiles):
+    """
+    Test reading files from parallel jobs.
+    """
+    _setup_logging()
+    numjobs = positive_int(numjobs, 'NUMJOBS')
+    fmt, numfiles = _get_pattern_and_numfiles(numfiles)
+    run_jobs(numjobs, [
+        os.path.realpath(sys.argv[0]), 'worker', 'rd',
+        storage, rootdir, fmt, '#', numfiles, numjobs
+    ])
+    logging.info("All done.")
+
+
+@benchmark.command()
+@argument("storage")
+@argument("rootdir")
+@argument("jobs")
+@argument("numfiles")
+def readwrite(storage, rootdir, jobs, numfiles):
+    """
+    Test reading *and* writing files from parallel jobs.
+    """
+    _setup_logging()
+    logging.critical("Not yet implemented!")
+
+
+@benchmark.command()
+@argument("storage")
+@argument("rootdir")
+@argument("numjobs")
+@argument("numfiles")
+@argument("payload")  # Path to a template file or output size
+def write(storage, rootdir, numjobs, numfiles, payload):
+    """
+    Test writing files from parallel jobs.
+    """
+    _setup_logging()
+    numjobs = positive_int(numjobs, 'NUMJOBS')
+    fmt, numfiles = _get_pattern_and_numfiles(numfiles)
+    run_jobs(numjobs, [
+        os.path.realpath(sys.argv[0]), 'worker', 'wr',
+        storage, rootdir, fmt, '#', numfiles, numjobs, payload
+    ])
+    logging.info("All done.")
+
+
 @cli.command()
 @argument("storage")
 @argument("rootdir")
@@ -371,7 +442,7 @@ def cli():
         help=("Working directory for writing temporary files."
               " Must be visible to all worker processes."))
 def create(storage, rootdir, numfiles, payload, jobs=1, work_dir=None):
-    """\
+    """
     Write fake payload in a given location.
 
     Fill the given location ROOTDIR with NUMFILES identical files.
@@ -383,11 +454,8 @@ def create(storage, rootdir, numfiles, payload, jobs=1, work_dir=None):
     turn determines how the root location specifier is interpreted.
     """
     _setup_logging()
-    numfiles = positive_int(numfiles, 'NUMFILES')
+    fmt, numfiles = _get_pattern_and_numfiles(numfiles)
     data = _get_payload(payload)
-
-    prec = 1 + int(math.log(numfiles, 10))
-    fmt = "data{{0:0{p}d}}".format(p=prec)
 
     # write payload data to a file in a shared directory
     if work_dir is None:
@@ -461,7 +529,7 @@ def rd(storage, rootdir, pattern, start, end, step, md5=None):
 @argument("start")
 @argument("end")
 @argument("step")
-@argument("payload")  # Path to a template file or size of the random data to be generated
+@argument("payload")  # Path to a template file or output size
 def wr(storage, rootdir, pattern, start, end, step, payload):
     """
     Write a range of identical files.
@@ -471,9 +539,7 @@ def wr(storage, rootdir, pattern, start, end, step, payload):
     start = nonnegative_int(start, 'START')
     end = positive_int(end, 'END')
     step = positive_int(step, 'STEP')
-    with open(payload, 'rb') as stream:
-        logging.debug("Loading data payload from file '%s' ...", payload)
-        data = stream.read()
+    data = _get_payload(payload)
     logging.debug("Using pattern '%s' for creating names.", pattern)
     logging.info(
         "Creating %d files, names ranging from '%s' to '%s' with stepping %d",
