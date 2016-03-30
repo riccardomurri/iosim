@@ -426,7 +426,7 @@ def worker():
               " (Must be a 32-digit hexadecimal string.)"))
 def rd(storage, rootdir, pattern, start, end, step, md5=None):
     """
-    Read a range of files and check intergrity.
+    Read a range of files and check integrity.
     """
     _setup_logging()
     storage = make_storage(storage, rootdir)
