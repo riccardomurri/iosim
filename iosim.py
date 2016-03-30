@@ -385,8 +385,8 @@ def run_jobs(jobs, argv, interval=1, verbose=True, max_concurrent=0):
         # print totals and averages
         print("Resource consumption statistics:")
         for desc, name, _, _ in fields:
-            print ("- Average {0} per job: {1}".format(desc, totals[name]))
-            print ("- Average {0} per *successful* job: {1}".format(desc, totals_ok[name]))
+            print ("- Average {0} per job: {1}".format(desc, totals[name] / jobs))
+            print ("- Average {0} per *successful* job: {1}".format(desc, totals_ok[name] / jobs))
 
 
 #
