@@ -389,13 +389,13 @@ def create(storage, rootdir, numfiles, payload, jobs=1, work_dir=None):
     prec = 1 + int(math.log(numfiles, 10))
     fmt = "data{{0:0{p}d}}".format(p=prec)
 
-    # write payload data to a file in a shared directory; must be
-    # careful to ensure that data is flushed out to the filesystem
-    # otherwise workers running remotely might not see it
+    # write payload data to a file in a shared directory
     if work_dir is None:
         work_dir = os.getcwd()
     with NamedTemporaryFile(prefix='payload.', dir=work_dir) as payload_file:
         payload_file.write(data)
+        # must be careful to ensure that data is flushed out to the
+        # filesystem otherwise workers running remotely might not see it
         payload_file.flush()
         os.fsync(payload_file)
 
