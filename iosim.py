@@ -43,7 +43,7 @@ import time
 from click import argument, command, group, option, echo, BadArgumentUsage
 
 from gc3libs import create_engine, Application
-from gc3libs.quantity import Memory
+from gc3libs.quantity import Duration, seconds, Memory, MB
 
 
 ## constants and defaults
@@ -52,7 +52,7 @@ class const:
     """A namespace for constant and default values."""
 
     logfmt = "%(asctime)s [%(processName)s/%(process)d %(funcName)s:%(lineno)d] %(levelname)s: %(message)s"
-    loglevel = logging.DEBUG
+    loglevel = logging.INFO
 
 
 ## aux functions
@@ -325,7 +325,7 @@ class FilesystemStorage(Storage):
 # GC3Pie interface
 #
 
-def run_jobs(jobs, argv, interval=1, max_concurrent=0):
+def run_jobs(jobs, argv, interval=1, verbose=True, max_concurrent=0):
     """
     Create and run jobs, each executing the command specified by `argv`.
 
@@ -333,10 +333,11 @@ def run_jobs(jobs, argv, interval=1, max_concurrent=0):
     string) ``#``, it is substituted with the current job index.
     """
     engine = create_engine(max_in_flight=max_concurrent)
+    tasks = []  # convenience for extracting stats later
     for n in xrange(jobs):
         jobname = ('worker{n}'.format(n=n))
         job_argv = [(arg if arg != '#' else n) for arg in argv]
-        engine.add(Application(
+        task = Application(
             job_argv,
             inputs=[],
             outputs=[],
@@ -344,7 +345,9 @@ def run_jobs(jobs, argv, interval=1, max_concurrent=0):
             stdout=(jobname + '.log'),
             join=True,
             jobname = jobname,
-        ))
+        )
+        engine.add(task)
+        tasks.append(task)
     # loop until all jobs are done
     stats = engine.stats()
     done = stats['TERMINATED']
@@ -358,6 +361,32 @@ def run_jobs(jobs, argv, interval=1, max_concurrent=0):
             " %d running, %d queued.",
             done, stats['ok'], stats['RUNNING'], stats['SUBMITTED'] + stats['NEW']
         )
+    if verbose:
+        fields = [
+            # description  field name          type      zero value
+            ('duration',   'duration',         Duration, (0, seconds)),
+            ('CPU time',   'used_cpu_time',    Duration, (0, seconds)),
+            ('RAM',        'max_used_memory',  Memory,   (0, Memory.MB)),
+        ]
+        # initialize counters to 0
+        totals = {}
+        totals_ok  = {}
+        for desc, name, init, zero in fields:
+            totals[name] = init(*zero)
+            totals_ok[name] = init(*zero)
+        # compute totals
+        for task in tasks:
+            for desc, name, _, _ in fields:
+                value = getattr(task.execution, name)
+                totals[name] += value
+                if (task.execution.state == 'TERMINATED'
+                    and task.execution.returncode == 0):
+                    totals_ok[name] += value
+        # print totals and averages
+        print("Resource consumption statistics:")
+        for desc, name, _, _ in fields:
+            print ("- Average {0} per job: {1}".format(desc, totals[name]))
+            print ("- Average {0} per *successful* job: {1}".format(desc, totals_ok[name]))
 
 
 #
