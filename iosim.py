@@ -315,14 +315,14 @@ class FilesystemStorage(Storage):
 # GC3Pie interface
 #
 
-def run_jobs(jobs, argv, interval=1):
+def run_jobs(jobs, argv, interval=1, max_concurrent=0):
     """
     Create and run jobs, each executing the command specified by `argv`.
 
     If any item in sequence `argv` is equal to the (single-character
     string) ``#``, it is substituted with the current job index.
     """
-    engine = create_engine()
+    engine = create_engine(max_in_flight=max_concurrent)
     for n in xrange(jobs):
         jobname = ('worker{n}'.format(n=n))
         job_argv = [(arg if arg != '#' else n) for arg in argv]
