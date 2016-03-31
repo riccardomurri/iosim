@@ -38,6 +38,7 @@ import math
 import os
 import sys
 from tempfile import NamedTemporaryFile
+from urlparse import urlparse
 import time
 
 from click import argument, command, group, option, echo, BadArgumentUsage
@@ -188,23 +189,24 @@ def _get_payload(payload):
 
 _storage_backend = {}
 
-def register_storage(cls, names):
-    for name in names:
-        _storage_backend[name] = cls
+def register_storage(cls, schemes):
+    for scheme in schemes:
+        _storage_backend[scheme] = cls
         logging.debug(
             "Using class '%s' for storage backend '%s' ...",
-            cls.__name__, name)
+            cls.__name__, scheme)
 
 
-def storage(*names):
+def storage(*schemes):
     """
     Class decorator to register a storage backend.
     """
-    return functools.partial(register_storage, names=names)
+    return functools.partial(register_storage, schemes=schemes)
 
 
-def make_storage(kind, *args, **kwargs):
-    return _storage_backend[kind](*args, **kwargs)
+def make_storage(url):
+    scheme, netloc, path, params, query, fragment = urlparse(url)
+    return _storage_backend[scheme](url)
 
 
 class Storage(object):
@@ -282,8 +284,10 @@ class FilesystemStorage(Storage):
     A `location` in this context is defined as a filesystem path.
     """
 
-    def __init__(self, uri):
-        self.rootdir = uri
+    def __init__(self, url):
+        scheme, netloc, path, params, query, fragment = urlparse(url)
+        assert netloc == '', "A `file://` URL must have *three* slashes."
+        self.rootdir = path
         # create output directory
         if not os.path.exists(self.rootdir):
             logging.info("Creating directory path '%s' ...", self.rootdir)
@@ -407,11 +411,10 @@ def benchmark():
 
 
 @benchmark.command()
-@argument("storage")
-@argument("rootdir")
+@argument("url")
 @argument("numjobs")
 @argument("numfiles")
-def read(storage, rootdir, numjobs, numfiles):
+def read(url, numjobs, numfiles):
     """
     Test reading files from parallel jobs.
     """
@@ -420,17 +423,16 @@ def read(storage, rootdir, numjobs, numfiles):
     fmt, numfiles = _get_pattern_and_numfiles(numfiles)
     run_jobs(numjobs, [
         os.path.realpath(sys.argv[0]), 'worker', 'rd',
-        storage, rootdir, fmt, '#', numfiles, numjobs
+        url, fmt, '#', numfiles, numjobs
     ])
     logging.info("All done.")
 
 
 @benchmark.command()
-@argument("storage")
-@argument("rootdir")
+@argument("url")
 @argument("jobs")
 @argument("numfiles")
-def readwrite(storage, rootdir, jobs, numfiles):
+def readwrite(url, jobs, numfiles):
     """
     Test reading *and* writing files from parallel jobs.
     """
@@ -439,12 +441,11 @@ def readwrite(storage, rootdir, jobs, numfiles):
 
 
 @benchmark.command()
-@argument("storage")
-@argument("rootdir")
+@argument("url")
 @argument("numjobs")
 @argument("numfiles")
 @argument("payload")  # Path to a template file or output size
-def write(storage, rootdir, numjobs, numfiles, payload):
+def write(url, numjobs, numfiles, payload):
     """
     Test writing files from parallel jobs.
     """
@@ -453,14 +454,13 @@ def write(storage, rootdir, numjobs, numfiles, payload):
     fmt, numfiles = _get_pattern_and_numfiles(numfiles)
     run_jobs(numjobs, [
         os.path.realpath(sys.argv[0]), 'worker', 'wr',
-        storage, rootdir, fmt, '#', numfiles, numjobs, payload
+        url, fmt, '#', numfiles, numjobs, payload
     ])
     logging.info("All done.")
 
 
 @cli.command()
-@argument("storage")
-@argument("rootdir")
+@argument("url")
 @argument("numfiles")
 @argument("payload")  # Path to a template file or size of the random data to be generated
 @option("--jobs", "-j",
@@ -470,7 +470,7 @@ def write(storage, rootdir, numjobs, numfiles, payload):
         default=None, metavar='DIR',
         help=("Working directory for writing temporary files."
               " Must be visible to all worker processes."))
-def create(storage, rootdir, numfiles, payload, jobs=1, work_dir=None):
+def create(url, numfiles, payload, jobs=1, work_dir=None):
     """
     Write fake payload in a given location.
 
@@ -498,7 +498,7 @@ def create(storage, rootdir, numfiles, payload, jobs=1, work_dir=None):
 
         # create identical output files
         run_jobs(jobs, [os.path.realpath(sys.argv[0]), 'worker', 'wr',
-                        storage, rootdir, fmt, '#', numfiles, jobs, payload_file.name])
+                        url, fmt, '#', numfiles, jobs, payload_file.name])
     logging.info("All done.")
 
 
@@ -511,8 +511,7 @@ def worker():
 
 
 @worker.command()
-@argument("storage")
-@argument("rootdir")
+@argument("url")
 @argument("pattern")
 @argument("start")
 @argument("end")
@@ -521,12 +520,12 @@ def worker():
         default=None, metavar='HASH',
         help=("Check that the MD5 checksum of each read file is exactly HASH."
               " (Must be a 32-digit hexadecimal string.)"))
-def rd(storage, rootdir, pattern, start, end, step, md5=None):
+def rd(url, pattern, start, end, step, md5=None):
     """
     Read a range of files and check integrity.
     """
     _setup_logging()
-    storage = make_storage(storage, rootdir)
+    storage = make_storage(url)
     start = nonnegative_int(start, 'START')
     end = positive_int(end, 'END')
     step = positive_int(step, 'STEP')
@@ -552,19 +551,18 @@ def rd(storage, rootdir, pattern, start, end, step, md5=None):
 
 
 @worker.command()
-@argument("storage")
-@argument("rootdir")
+@argument("url")
 @argument("pattern")
 @argument("start")
 @argument("end")
 @argument("step")
 @argument("payload")  # Path to a template file or output size
-def wr(storage, rootdir, pattern, start, end, step, payload):
+def wr(url, pattern, start, end, step, payload):
     """
     Write a range of identical files.
     """
     _setup_logging()
-    storage = make_storage(storage, rootdir)
+    storage = make_storage(url)
     start = nonnegative_int(start, 'START')
     end = positive_int(end, 'END')
     step = positive_int(step, 'STEP')
